@@ -1,0 +1,192 @@
+---
+title: "Guided Tutorial PBMCs"
+output:
+  word_document: default
+  html_notebook: default
+  pdf_document: default
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+
+Website URL: https://satijalab.org/seurat/articles/pbmc3k_tutorial.html
+Line 26: note I used the full filepath because the filepath on the website did not work. My filepath omits pbmc3k from the filepath. Unzipped file and the zipped file in 'data'.
+
+LOADING DATASET AND VIEWING GENE MATRIX
+```{r}
+library(dplyr)
+library(Seurat)
+library(patchwork)
+pbmc.data <- Read10X(data.dir = "/Users/johnjacob/Documents/JJ/R coding/Seurat/SatijaLab_tutorials/R_Notebooks/data/filtered_gene_bc_matrices/hg19/")
+pbmc <- CreateSeuratObject(counts = pbmc.data, project = "pbmc3k", min.cells = 3, min.features = 200)
+pbmc 
+```
+```{r}
+pbmc.data[c("CD3D", "TCL1A", "MS4A1"), 1:30] # view 3 features and 30 cells (columns) of matrix
+```
+
+```{r}
+dense.size <- object.size(as.matrix(pbmc.data))
+dense.size
+```
+
+```{r}
+sparse.size <- object.size(pbmc.data)
+sparse.size
+```
+```{r}
+dense.size / sparse.size
+```
+
+STANDARD PRE-PROCESSING WORKFLOW
+1) QC and selecting cells for further analysis
+```{r}
+pbmc[["percent.mt"]] <- PercentageFeatureSet(pbmc, pattern = "^MT-") # alternatively use: 
+# pbmc$percent.mt <- PercentageFeatureSet(pbmc, pattern = "^MT-")
+
+# Show QC metrics for the first 5 cells
+head(pbmc@meta.data, 5)
+
+```
+visualise QC metrics as violin plot - first the unfiltered data
+```{r}
+VlnPlot(pbmc, features = c("nCount_RNA", "nFeature_RNA", "percent.mt"), ncol = 3)
+```
+Use FeatureScatter function to visualise relatiosnhips between the above parameters (shown in mito. graph)
+
+```{r}
+plot1 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+```
+
+Now, remove unwanted cells (filter the data) and repeat the violin plot
+```{r}
+pbmc <- subset(pbmc, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 5)
+VlnPlot(pbmc, features = c("nCount_RNA", "nFeature_RNA", "percent.mt"), ncol = 3)
+```
+NORMALIZATION - 10X UMI-based scRNA-seq still requires normalisation. Although PCR bias is compensated by UMIs, depth of sequencing and differences in capture efficiency before reverse trasncription are other sources of technical variation between samples.
+
+```{r}
+pbmc <- NormalizeData(pbmc, normalization.method = "LogNormalize")
+```
+
+
+SELECTING THE MOST VARIABLE GENES (FEATURES)
+Find genes that vary the most from cell to cell.
+
+```{r}
+pbmc <- FindVariableFeatures(pbmc, selection.method = "vst", nFeatures = 2000)
+
+# find the 10 most variable genes
+top10 <- head(VariableFeatures(pbmc), 10)
+top10
+```
+```{r}
+# plot the variable genes with and without labels
+plot1 <- VariableFeaturePlot(pbmc)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE, xnudge = 0, ynudge = 0) # set xnudge and ynudge to 0, otherwise labels overlap dots
+plot1
+plot2
+```
+
+
+SCALE THE DATA - before linear dimension reduction - mitochondrial genes already regressed out earlier in filtering ('subset') step
+
+```{r}
+pbmc <- ScaleData(pbmc)
+```
+
+LINEAR DIMENSION REDUCTION
+only the previously defined variable features are used as input by default.
+
+Use PCA to transform the data
+```{r}
+pbmc <- RunPCA(pbmc) # 'pbmc' here is the processed gene matrix - using 'subset', 'Normalizedata', 'FindVariableFeatures', and 'ScaleData'
+
+```
+As above, but for fewer genes
+```{r}
+print(pbmc[["pca"]], dims = 1:5, nfeatures = 5)
+```
+Another PCA visualisation (I don't understand the graphs)
+```{r}
+VizDimLoadings(pbmc, dims = 1:2, reduction = "pca")
+VizDimLoadings(pbmc, dims = 1:2, nfeatures = 10, reduction = "pca")
+```
+Another PCA plot - this one more recognisable
+```{r}
+DimPlot(pbmc, reduction = "pca") # one of the arguments is dims (dimensions) that must be a vector of length 2
+```
+'DimHeatMap' function very useful to plot PCA dimensions and see which ones contribute significantly to variation in the dataset. Useful to decide how many principal components to include in downstream analyses.
+```{r}
+DimHeatmap(pbmc, dims = 1, cells = 500, balanced = TRUE)
+
+```
+DimHeatMap again but for 12 principal components
+```{r}
+DimHeatmap(pbmc, dims = 1:12, cells = 500, balanced = TRUE)
+```
+DETERMINE DIMENSIONALITY OF THE DATASET. Visualise the 'significant' principal components using an Elbow plot - approximate (heuristic) solution. Other techniques like 'JackStraw' plot take a lot longer - see Vignette for details of this function
+```{r}
+ElbowPlot(pbmc)
+```
+
+CLUSTER THE CELLS
+
+```{r}
+pbmc <- FindNeighbors(pbmc, dims = 1:10)
+pbmc <- FindClusters(pbmc, resolution = 0.5)
+```
+look at cluster IDs of first 5 cells
+```{r}
+head(Idents(pbmc), 5)
+```
+
+RUN NON-LINEAR DIMENSION REDUCTION (tSNE/UMAP).
+Need to load the 'reticulate' package - already downloaded
+ - 'library(reticulate)'
+ - then install UMAP via 'reticulate::py_install(packages = 'umap-learn')'
+```{r}
+pbmc <- RunUMAP(pbmc, dims = 1:10)
+```
+```{r}
+DimPlot(pbmc, reduction = "umap")
+```
+```{r}
+# save the object at this point so that it can easily be loaded back in without having to rerun the computationally intensive steps performed above, or easily shared with collaborators. For 'file = ' use the full filepath. I created a new folder called 'output' before saving the file.
+
+# When loading this file use 'readRDS'. There must be NO whitespace in any directory names if there are more subfolders within the working directory. So, sub-folders MUST NOT have white space!!
+
+# When loading this file, syntax is:
+# readRDS("./R_Notebooks/output/pbmc_tutorial.rds")  note SINGLE dot at the beginning.
+# or use full filepath but that is tedious to write(!):
+# readRDS("/Users/johnjacob/Documents/JJ/R coding/Seurat/SatijaLab_tutorials/R_Notebooks/output/pbmc_tutorial.rds")
+
+
+saveRDS(pbmc, file = "/Users/johnjacob/Documents/JJ/R coding/Seurat/SatijaLab_tutorials/R_Notebooks/output/pbmc_tutorial.rds")  
+```
+
+FIND DIFFERENTIALLY EXPRESSED GENES
+
+```{r}
+# "FindMarkers()" finds DGEs in a given cluster - both positive and negative compared to all other cells
+
+cluster2.markers <- FindMarkers(pbmc, ident.1 = 2, min.pct = 0.5)  # cluster 2, min.pct = MINIMUM percentage of cells (in vignette, set at 0.25) Default method for FindMarkers is Wilcoxon Rank Sum Test. This function is slow to run. To speed it up, can downsample number of cells - see vignette for details.
+
+head(cluster2.markers, n = 5)
+
+# pct.1 : The percentage of cells where the gene is detected in the cluster
+# pct.2 : The percentage of cells where the gene is detected on average in the other clusters.
+# When looking at the output, suggest looking for marker genes with large differences in expression between pct.1 and pct.2 and larger fold changes. For instance if pct.1 = 0.90 and pct.2 = 0.80 and had lower log2 fold changes, that marker might not be as exciting. However, if pct.2 = 0.1 instead, then it would be a lot more exciting. p-values alone not a good guide for marker use as they nare inflated.
+```
+```{r}
+# find markers distinguishing cluster 5 from clusters 0 and 3.
+cluster5.markers.v.0.3 <- FindMarkers(pbmc, ident.1 = 5, ident.2 = c(0, 3), min.pct = 0.25)
+head(cluster5.markers.v.0.3, n = 5)
+```
+```{r}
+# 'FindAllMarkers()' - find markers for every cluster compared to all remaining cells, report only the positive ones
+
+```
+
